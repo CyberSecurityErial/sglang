@@ -97,11 +97,17 @@ def build_draft_tp_worker(
         context_length=target_model_config.context_len,
     )
 
-    # preserve_config reinstates the target's resolved config verbatim on exit
-    # (post-publish overrides intact) -- unlike the previous save/restore, whose
-    # ``set_server_args(saved)`` re-projected the bags from the pristine record
-    # and dropped every override recorded during target loading.
+    # Publish the draft copy for the duration of the build so the draft's model
+    # layers resolve config (e.g. kv_cache_dtype) from the draft's own bags, not
+    # the target's -- an independently configured draft can resolve a different
+    # KV-cache dtype than the target, and reading the target-global bag would
+    # make draft attention record the wrong dtype. ``preserve_config`` snapshots
+    # the target's resolved config on entry and reinstates it verbatim on exit
+    # (post-publish overrides intact), so the target is undisturbed afterwards --
+    # unlike a plain ``set_server_args(saved)`` restore, which re-projects the
+    # bags from the pristine record and drops those overrides.
     with get_context().preserve_config():
+        get_context().set_server_args(draft_server_args)
         draft_worker = TpModelWorker(
             server_args=draft_server_args,
             gpu_id=gpu_id,
