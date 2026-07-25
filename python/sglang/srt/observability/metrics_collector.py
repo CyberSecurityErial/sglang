@@ -21,7 +21,7 @@ import os
 import time
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Union
 
 from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.environ import envs
@@ -146,6 +146,8 @@ class SchedulerStats:
     # HiCache metrics
     hicache_host_used_tokens: int = 0
     hicache_host_total_tokens: int = 0
+    # Per-pool host occupancy: pool name -> (used_tokens, total_tokens).
+    hicache_host_pools: Dict[str, Tuple[int, int]] = field(default_factory=dict)
 
     # Streaming session metrics
     num_streaming_sessions: int = 0
@@ -639,6 +641,20 @@ class SchedulerMetricsCollector(_StatLoggerDIMixin):
                 name="sglang:hicache_host_total_tokens",
                 documentation="Total capacity of the host KV cache in tokens.",
                 labelnames=labels.keys(),
+                multiprocess_mode="mostrecent",
+            )
+            self.hicache_host_pool_used_tokens = Gauge(
+                name="sglang:hicache_host_pool_used_tokens",
+                documentation="Number of tokens currently used in each host "
+                "cache pool (kv, swa, mamba, ...).",
+                labelnames=list(labels.keys()) + ["pool"],
+                multiprocess_mode="mostrecent",
+            )
+            self.hicache_host_pool_total_tokens = Gauge(
+                name="sglang:hicache_host_pool_total_tokens",
+                documentation="Total capacity in tokens of each host cache "
+                "pool (kv, swa, mamba, ...).",
+                labelnames=list(labels.keys()) + ["pool"],
                 multiprocess_mode="mostrecent",
             )
 
@@ -1352,6 +1368,13 @@ class SchedulerMetricsCollector(_StatLoggerDIMixin):
             self._log_gauge(
                 self.hicache_host_total_tokens, stats.hicache_host_total_tokens
             )
+            for pool, (used_tokens, total_tokens) in stats.hicache_host_pools.items():
+                self.hicache_host_pool_used_tokens.labels(
+                    **self.labels, pool=pool
+                ).set(used_tokens)
+                self.hicache_host_pool_total_tokens.labels(
+                    **self.labels, pool=pool
+                ).set(total_tokens)
 
         # Streaming session metrics
         if self.enable_streaming_session:
@@ -1924,6 +1947,31 @@ class RadixCacheMetricsCollector(_StatLoggerDIMixin):
                 0.5,
                 1.0,
             ]
+        # Write-back D->H transfers include blocking merged ops issued during
+        # eviction under --hicache-write-policy write_back, which can run for
+        # seconds -- hence the wider default range than eviction/load-back.
+        bucket_write_back_duration = get_histogram_conf_from_env(
+            "SGLANG_BUCKET_WRITE_BACK_DURATION"
+        )
+        if bucket_write_back_duration is None:
+            bucket_write_back_duration = [
+                0.001,
+                0.002,
+                0.005,
+                0.01,
+                0.02,
+                0.05,
+                0.1,
+                0.2,
+                0.5,
+                1.0,
+                2.0,
+                5.0,
+                10.0,
+                30.0,
+                60.0,
+            ]
+
         self.eviction_duration_seconds = Histogram(
             name="sglang:eviction_duration_seconds",
             documentation="Time taken to evict memory from GPU to CPU in seconds.",
@@ -1950,6 +1998,37 @@ class RadixCacheMetricsCollector(_StatLoggerDIMixin):
             labelnames=labels.keys(),
         )
 
+        self.write_back_duration_seconds = Histogram(
+            name="sglang:write_back_duration_seconds",
+            documentation="Time taken to back up KV cache from GPU to CPU host "
+            "memory in seconds, per merged write op.",
+            labelnames=labels.keys(),
+            buckets=bucket_write_back_duration,
+        )
+
+        self.write_back_num_tokens = Counter(
+            name="sglang:write_back_tokens_total",
+            documentation="The number of tokens backed up from GPU to CPU host "
+            "memory, by host pool (kv, swa, mamba, ...).",
+            labelnames=list(labels.keys()) + ["pool"],
+        )
+
+        self.hicache_dropped_tokens = Counter(
+            name="sglang:hicache_dropped_tokens_total",
+            documentation="The number of device KV tokens destroyed without a "
+            "host backup, by reason (e.g. write-back backup failure under host "
+            "memory pressure).",
+            labelnames=list(labels.keys()) + ["reason"],
+        )
+
+        self.hicache_drop_declined = Counter(
+            name="sglang:hicache_drop_declined_total",
+            documentation="Write-back backups that failed under host memory "
+            "pressure where the subtree drop was declined (locked nodes); the "
+            "device KV stays resident until host space frees.",
+            labelnames=labels.keys(),
+        )
+
     def increment_eviction_num_tokens(self, num_tokens: int) -> None:
         self.eviction_num_tokens.labels(**self.labels).inc(num_tokens)
 
@@ -1961,6 +2040,22 @@ class RadixCacheMetricsCollector(_StatLoggerDIMixin):
 
     def observe_load_back_duration(self, duration_seconds: float) -> None:
         self.load_back_duration_seconds.labels(**self.labels).observe(duration_seconds)
+
+    def increment_write_back_num_tokens(self, num_tokens: int, pool: str) -> None:
+        self.write_back_num_tokens.labels(**self.labels, pool=pool).inc(num_tokens)
+
+    def observe_write_back_duration(self, duration_seconds: float) -> None:
+        self.write_back_duration_seconds.labels(**self.labels).observe(
+            duration_seconds
+        )
+
+    def increment_dropped_tokens(self, num_tokens: int, reason: str) -> None:
+        self.hicache_dropped_tokens.labels(**self.labels, reason=reason).inc(
+            num_tokens
+        )
+
+    def increment_drop_declined(self) -> None:
+        self.hicache_drop_declined.labels(**self.labels).inc()
 
 
 class EncoderMetricsCollector(_StatLoggerDIMixin):

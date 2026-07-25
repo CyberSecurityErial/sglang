@@ -163,6 +163,8 @@ class HiCacheAck(NamedTuple):
     node_ids: List[int]
     num_tokens: int = 0
     timing_enabled: bool = False
+    # Tokens transferred per host pool (PoolName value -> count).
+    num_tokens_by_pool: Optional[dict[str, int]] = None
 
 
 class StorageOperation:
@@ -714,11 +716,12 @@ class HiCacheController:
         self.write_queue.clear()
 
         start_event = device_module.Event()
-        finish_event = device_module.Event()
+        ack_start_event, ack_finish_event, timing_enabled = make_timing_event_pair()
 
         start_event.record()
         with device_module.stream(self.write_stream):
             start_event.wait(self.write_stream)
+            ack_start_event.record()
             self.mem_pool_host.backup_from_device_all_layer(
                 self.mem_pool_device, host_indices, device_indices, self.io_backend
             )
@@ -729,7 +732,7 @@ class HiCacheController:
                     device_indices,
                     self.io_backend,
                 )
-            finish_event.record()
+            ack_finish_event.record()
             # NOTE: We must save the host indices and device indices here,
             # this is because we need to guarantee that these tensors are
             # still alive when the write stream is executing.
@@ -738,7 +741,16 @@ class HiCacheController:
             if device_indices.is_cuda:
                 device_indices.record_stream(self.write_stream)
 
-        self.ack_write_queue.append(HiCacheAck(start_event, finish_event, op.node_ids))
+        self.ack_write_queue.append(
+            HiCacheAck(
+                start_event=ack_start_event,
+                finish_event=ack_finish_event,
+                node_ids=op.node_ids,
+                num_tokens=len(op.device_indices),
+                timing_enabled=timing_enabled,
+                num_tokens_by_pool={PoolName.KV.value: len(op.device_indices)},
+            )
+        )
 
     def load(
         self,

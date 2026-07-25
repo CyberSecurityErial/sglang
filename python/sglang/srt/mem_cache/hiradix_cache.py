@@ -782,6 +782,22 @@ class HiRadixCache(RadixCache):
         if self.token_to_kv_pool_host is not None:
             self.token_to_kv_pool_host.destroy()
 
+    def host_pool_stats(self) -> List[Tuple[str, int, int]]:
+        from sglang.srt.mem_cache.memory_pool_host import HostPoolGroup
+
+        host_pool = self.token_to_kv_pool_host
+        if host_pool is None:
+            return []
+        if isinstance(host_pool, HostPoolGroup):
+            return host_pool.occupancy_by_pool()
+        return [
+            (
+                PoolName.KV.value,
+                host_pool.size - host_pool.available_size(),
+                host_pool.size,
+            )
+        ]
+
     def get_height(self, node: TreeNode):
         height = 0
         while node != self.root_node:
@@ -989,6 +1005,7 @@ class HiRadixCache(RadixCache):
                     ack.finish_event.synchronize()
                     for ack_id in ack.node_ids:
                         self._finish_write_through_ack(ack_id, release_lock=False)
+                    self._log_write_ack_metrics(ack)
                 self.cache_controller.ack_write_queue.clear()
                 assert len(self.ongoing_write_through) == 0
             return
@@ -1014,7 +1031,21 @@ class HiRadixCache(RadixCache):
             ack.finish_event.synchronize()
             for ack_id in ack.node_ids:
                 self._finish_write_through_ack(ack_id, release_lock=True)
+            self._log_write_ack_metrics(ack)
             finish_count -= 1
+
+    def _log_write_ack_metrics(self, ack) -> None:
+        """Record D->H backup volume and duration for a completed write ack."""
+        if self.metrics_collector is None:
+            return
+        for pool, num_tokens in (ack.num_tokens_by_pool or {}).items():
+            if num_tokens > 0:
+                self.metrics_collector.increment_write_back_num_tokens(
+                    num_tokens=num_tokens, pool=pool
+                )
+        if ack.timing_enabled:
+            duration_ms = ack.start_event.elapsed_time(ack.finish_event)
+            self.metrics_collector.observe_write_back_duration(duration_ms / 1000.0)
 
     def loading_check(self):
         finish_count = 0

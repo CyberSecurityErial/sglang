@@ -1005,14 +1005,17 @@ class SchedulerMetricsReporter:
         if not self.scheduler.enable_hierarchical_cache:
             return
 
-        host_pool = getattr(
-            self.scheduler.tree_cache, "token_to_kv_pool_host", None
-        ) or getattr(self.scheduler.tree_cache, "full_kv_pool_host", None)
-        assert host_pool is not None, "Host pool not found"
-        self.stats.hicache_host_used_tokens = (
-            host_pool.size - host_pool.available_size()
-        )
-        self.stats.hicache_host_total_tokens = host_pool.size
+        pool_stats = self.scheduler.tree_cache.host_pool_stats()
+        assert pool_stats, "Host pool not found"
+        # The aggregate gauges keep their historical semantics: primary
+        # (anchor) KV pool only. Auxiliary pools (swa, mamba, ...) are
+        # reported via the pool-labeled gauges.
+        _, primary_used, primary_total = pool_stats[0]
+        self.stats.hicache_host_used_tokens = primary_used
+        self.stats.hicache_host_total_tokens = primary_total
+        self.stats.hicache_host_pools = {
+            pool: (used, total) for pool, used, total in pool_stats
+        }
 
     def _update_lora_metrics(self):
         """Update LoRA pool metrics for monitoring and autoscaling."""

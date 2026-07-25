@@ -626,6 +626,9 @@ class StreamingSession(BasePrefixCache):
     def init_metrics_collector(self):
         return self.inner.init_metrics_collector()
 
+    def host_pool_stats(self):
+        return self.inner.host_pool_stats()
+
     def sanity_check(self):
         # Skip inner sanity check when sessions hold tree locks, because
         # the check asserts all nodes are unlocked during idle.

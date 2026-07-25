@@ -67,6 +67,7 @@ from sglang.srt.observability.metrics_collector import (
 from sglang.srt.session.streaming_session import StreamingSession
 
 if TYPE_CHECKING:
+    from sglang.srt.managers.cache_controller import HiCacheAck
     from sglang.srt.managers.schedule_batch import Req
     from sglang.srt.mem_cache.cache_init_params import CacheInitParams
     from sglang.srt.mem_cache.hybrid_cache.hybrid_cache_controller import (
@@ -573,6 +574,11 @@ class UnifiedRadixCache(KVCacheEventMixin, BasePrefixCache):
     def release_host_resources(self) -> None:
         if self.host_pool_group is not None:
             self.host_pool_group.destroy()
+
+    def host_pool_stats(self) -> list[tuple[str, int, int]]:
+        if self.host_pool_group is None:
+            return []
+        return self.host_pool_group.occupancy_by_pool()
 
     def match_prefix(self, params: MatchPrefixParams) -> MatchResult:
         result = self.session.try_match_prefix(params)
@@ -1513,13 +1519,21 @@ class UnifiedRadixCache(KVCacheEventMixin, BasePrefixCache):
             ):
                 written = self.write_backup(node, write_back=True)
                 if written == 0:
+                    freed_before_drop = sum(tracker.values())
                     if self._drop_subtree_no_host(node, tracker):
+                        if self.metrics_collector is not None:
+                            self.metrics_collector.increment_dropped_tokens(
+                                num_tokens=sum(tracker.values()) - freed_before_drop,
+                                reason="host_pressure",
+                            )
                         logger.warning(
                             "write_back: KV subtree dropped without backup "
                             "due to host memory pressure, root node %d",
                             node.id,
                         )
                     else:
+                        if self.metrics_collector is not None:
+                            self.metrics_collector.increment_drop_declined()
                         logger.warning(
                             "write_back: backup failed under host memory "
                             "pressure but subtree drop declined (node "
@@ -2569,6 +2583,7 @@ class UnifiedRadixCache(KVCacheEventMixin, BasePrefixCache):
                     for ack_id in ack.node_ids:
                         if ack_id in self.ongoing_write_through:
                             self._finish_write_through_ack(ack_id)
+                    self._log_write_ack_metrics(ack)
                 cc.ack_write_queue.clear()
                 assert len(self.ongoing_write_through) == 0
             return
@@ -2592,7 +2607,21 @@ class UnifiedRadixCache(KVCacheEventMixin, BasePrefixCache):
             ack.finish_event.synchronize()
             for ack_id in ack.node_ids:
                 self._finish_write_through_ack(ack_id)
+            self._log_write_ack_metrics(ack)
             finish_count -= 1
+
+    def _log_write_ack_metrics(self, ack: HiCacheAck) -> None:
+        """Record D->H backup volume and duration for a completed write ack."""
+        if self.metrics_collector is None:
+            return
+        for pool, num_tokens in (ack.num_tokens_by_pool or {}).items():
+            if num_tokens > 0:
+                self.metrics_collector.increment_write_back_num_tokens(
+                    num_tokens=num_tokens, pool=pool
+                )
+        if ack.timing_enabled:
+            duration_ms = ack.start_event.elapsed_time(ack.finish_event)
+            self.metrics_collector.observe_write_back_duration(duration_ms / 1000.0)
 
     def loading_check(self) -> None:
         """Poll load-back completions."""
