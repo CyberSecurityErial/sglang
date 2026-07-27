@@ -450,8 +450,7 @@ class HybridCacheController(BaseHiCacheController):
         )
 
     def _write_num_tokens_by_pool(self, op: CacheOperation) -> dict[str, int]:
-        """Per-pool token counts for a merged write op (anchor + extra pools).
-        """
+        """Per-pool token counts for a merged write op (anchor + extra pools)."""
         counts = {self.mem_pool_host.anchor_entry.name.value: len(op.device_indices)}
         for transfer in op.pool_transfers or []:
             if transfer.indices_from_pool is not None or transfer.host_indices is None:

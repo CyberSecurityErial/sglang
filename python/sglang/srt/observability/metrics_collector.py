@@ -1369,9 +1369,9 @@ class SchedulerMetricsCollector(_StatLoggerDIMixin):
                 self.hicache_host_total_tokens, stats.hicache_host_total_tokens
             )
             for pool, (used_tokens, total_tokens) in stats.hicache_host_pools.items():
-                self.hicache_host_pool_used_tokens.labels(
-                    **self.labels, pool=pool
-                ).set(used_tokens)
+                self.hicache_host_pool_used_tokens.labels(**self.labels, pool=pool).set(
+                    used_tokens
+                )
                 self.hicache_host_pool_total_tokens.labels(
                     **self.labels, pool=pool
                 ).set(total_tokens)
@@ -2016,9 +2016,9 @@ class RadixCacheMetricsCollector(_StatLoggerDIMixin):
         self.hicache_dropped_tokens = Counter(
             name="sglang:hicache_dropped_tokens_total",
             documentation="The number of device KV tokens destroyed without a "
-            "host backup, by reason (e.g. write-back backup failure under host "
-            "memory pressure).",
-            labelnames=list(labels.keys()) + ["reason"],
+            "host backup, by pool (kv, swa, ...) and reason (e.g. write-back "
+            "backup failure under host memory pressure).",
+            labelnames=list(labels.keys()) + ["reason", "pool"],
         )
 
         self.hicache_drop_declined = Counter(
@@ -2045,12 +2045,10 @@ class RadixCacheMetricsCollector(_StatLoggerDIMixin):
         self.write_back_num_tokens.labels(**self.labels, pool=pool).inc(num_tokens)
 
     def observe_write_back_duration(self, duration_seconds: float) -> None:
-        self.write_back_duration_seconds.labels(**self.labels).observe(
-            duration_seconds
-        )
+        self.write_back_duration_seconds.labels(**self.labels).observe(duration_seconds)
 
-    def increment_dropped_tokens(self, num_tokens: int, reason: str) -> None:
-        self.hicache_dropped_tokens.labels(**self.labels, reason=reason).inc(
+    def increment_dropped_tokens(self, num_tokens: int, reason: str, pool: str) -> None:
+        self.hicache_dropped_tokens.labels(**self.labels, reason=reason, pool=pool).inc(
             num_tokens
         )
 

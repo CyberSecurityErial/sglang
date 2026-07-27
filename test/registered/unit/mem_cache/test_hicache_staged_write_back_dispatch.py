@@ -167,6 +167,7 @@ class TestHiCacheStagedWriteBackDispatch(unittest.TestCase):
 
     def tearDown(self):
         manager_cache_controller._timing_events_supported.cache_clear()
+
     def _patched_transfers(self, src_registry=None, module=MEMORY_POOL_HOST_MODULE):
         staged_side_effect = None
         if src_registry is not None:
@@ -730,10 +731,13 @@ class TestHiCacheStagedWriteBackDispatch(unittest.TestCase):
             )
         )
 
-        with mock.patch.object(
-            hybrid_cache_controller, "device_module", _FakeDeviceModule
-        ), mock.patch.object(
-            manager_cache_controller, "device_module", _FakeDeviceModule
+        with (
+            mock.patch.object(
+                hybrid_cache_controller, "device_module", _FakeDeviceModule
+            ),
+            mock.patch.object(
+                manager_cache_controller, "device_module", _FakeDeviceModule
+            ),
         ):
             controller.start_writing()
 
@@ -785,10 +789,13 @@ class TestHiCacheStagedWriteBackDispatch(unittest.TestCase):
             return_value=(op.host_indices, op.device_indices, op.pool_transfers)
         )
 
-        with mock.patch.object(
-            hybrid_cache_controller, "device_module", _FakeDeviceModule
-        ), mock.patch.object(
-            manager_cache_controller, "device_module", _FakeDeviceModule
+        with (
+            mock.patch.object(
+                hybrid_cache_controller, "device_module", _FakeDeviceModule
+            ),
+            mock.patch.object(
+                manager_cache_controller, "device_module", _FakeDeviceModule
+            ),
         ):
             controller.start_writing()
 

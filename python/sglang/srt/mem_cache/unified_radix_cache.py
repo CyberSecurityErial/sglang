@@ -78,6 +78,14 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 
+# Metric label per component, matching the host pool names used by
+# write_back_tokens_total and the host occupancy gauges.
+_COMPONENT_POOL_LABEL = {
+    ComponentType.FULL: PoolName.KV.value,
+    ComponentType.SWA: PoolName.SWA.value,
+    ComponentType.MAMBA: PoolName.MAMBA.value,
+}
+
 
 class UnifiedTreeNode:
     counter = 0
@@ -1519,13 +1527,17 @@ class UnifiedRadixCache(KVCacheEventMixin, BasePrefixCache):
             ):
                 written = self.write_backup(node, write_back=True)
                 if written == 0:
-                    freed_before_drop = sum(tracker.values())
+                    freed_before_drop = dict(tracker)
                     if self._drop_subtree_no_host(node, tracker):
                         if self.metrics_collector is not None:
-                            self.metrics_collector.increment_dropped_tokens(
-                                num_tokens=sum(tracker.values()) - freed_before_drop,
-                                reason="host_pressure",
-                            )
+                            for ct, freed in tracker.items():
+                                dropped = freed - freed_before_drop[ct]
+                                if dropped > 0:
+                                    self.metrics_collector.increment_dropped_tokens(
+                                        num_tokens=dropped,
+                                        reason="host_pressure",
+                                        pool=_COMPONENT_POOL_LABEL[ct],
+                                    )
                         logger.warning(
                             "write_back: KV subtree dropped without backup "
                             "due to host memory pressure, root node %d",
