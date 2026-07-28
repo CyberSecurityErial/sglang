@@ -1563,20 +1563,6 @@ class HostPoolGroup:
     def get_pool(self, name: PoolName):
         return self.entry_map[name].host_pool
 
-    def occupancy_by_pool(self) -> list[tuple[str, int, int]]:
-        """(pool_name, used_tokens, total_tokens) per entry, anchor first."""
-        entries = [self.anchor_entry] + [
-            entry for entry in self.entries if entry is not self.anchor_entry
-        ]
-        return [
-            (
-                entry.name.value,
-                entry.host_pool.size - entry.host_pool.available_size(),
-                entry.host_pool.size,
-            )
-            for entry in entries
-        ]
-
     def get_page_buffer_meta(self, indices):
         return self.anchor_entry.host_pool.get_page_buffer_meta(indices)
 

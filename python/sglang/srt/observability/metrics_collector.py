@@ -21,7 +21,7 @@ import os
 import time
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
 
 from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.environ import envs
@@ -146,8 +146,6 @@ class SchedulerStats:
     # HiCache metrics
     hicache_host_used_tokens: int = 0
     hicache_host_total_tokens: int = 0
-    # Per-pool host occupancy: pool name -> (used_tokens, total_tokens).
-    hicache_host_pools: Dict[str, Tuple[int, int]] = field(default_factory=dict)
 
     # Streaming session metrics
     num_streaming_sessions: int = 0
@@ -641,20 +639,6 @@ class SchedulerMetricsCollector(_StatLoggerDIMixin):
                 name="sglang:hicache_host_total_tokens",
                 documentation="Total capacity of the host KV cache in tokens.",
                 labelnames=labels.keys(),
-                multiprocess_mode="mostrecent",
-            )
-            self.hicache_host_pool_used_tokens = Gauge(
-                name="sglang:hicache_host_pool_used_tokens",
-                documentation="Number of tokens currently used in each host "
-                "cache pool (kv, swa, mamba, ...).",
-                labelnames=list(labels.keys()) + ["pool"],
-                multiprocess_mode="mostrecent",
-            )
-            self.hicache_host_pool_total_tokens = Gauge(
-                name="sglang:hicache_host_pool_total_tokens",
-                documentation="Total capacity in tokens of each host cache "
-                "pool (kv, swa, mamba, ...).",
-                labelnames=list(labels.keys()) + ["pool"],
                 multiprocess_mode="mostrecent",
             )
 
@@ -1368,13 +1352,6 @@ class SchedulerMetricsCollector(_StatLoggerDIMixin):
             self._log_gauge(
                 self.hicache_host_total_tokens, stats.hicache_host_total_tokens
             )
-            for pool, (used_tokens, total_tokens) in stats.hicache_host_pools.items():
-                self.hicache_host_pool_used_tokens.labels(**self.labels, pool=pool).set(
-                    used_tokens
-                )
-                self.hicache_host_pool_total_tokens.labels(
-                    **self.labels, pool=pool
-                ).set(total_tokens)
 
         # Streaming session metrics
         if self.enable_streaming_session:

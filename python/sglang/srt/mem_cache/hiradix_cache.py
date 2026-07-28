@@ -782,22 +782,6 @@ class HiRadixCache(RadixCache):
         if self.token_to_kv_pool_host is not None:
             self.token_to_kv_pool_host.destroy()
 
-    def host_pool_stats(self) -> List[Tuple[str, int, int]]:
-        from sglang.srt.mem_cache.memory_pool_host import HostPoolGroup
-
-        host_pool = self.token_to_kv_pool_host
-        if host_pool is None:
-            return []
-        if isinstance(host_pool, HostPoolGroup):
-            return host_pool.occupancy_by_pool()
-        return [
-            (
-                PoolName.KV.value,
-                host_pool.size - host_pool.available_size(),
-                host_pool.size,
-            )
-        ]
-
     def get_height(self, node: TreeNode):
         height = 0
         while node != self.root_node:

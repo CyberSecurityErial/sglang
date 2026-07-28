@@ -210,9 +210,6 @@ class HiMambaRadixCache(MambaRadixCache):
     def release_host_resources(self) -> None:
         self.host_pool_group.destroy()
 
-    def host_pool_stats(self) -> list[tuple[str, int, int]]:
-        return self.host_pool_group.occupancy_by_pool()
-
     def write_backup(self, node: TreeNode, write_back=False) -> int:
         # Backup invariant (for write-through mode): backed-up nodes must form a
         # contiguous prefix from root — no gaps.  Skip if parent isn't backed

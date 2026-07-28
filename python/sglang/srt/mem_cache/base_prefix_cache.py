@@ -261,16 +261,6 @@ class BasePrefixCache(ABC, PrefixCacheTrait):
         tens of seconds (see HostKVCache.destroy). Idempotent.
         """
 
-    def host_pool_stats(self) -> list[tuple[str, int, int]]:
-        """Per-pool occupancy of the host (L2) cache tier, as
-        (pool_name, used_tokens, total_tokens) triples.
-
-        Caches without a host tier return an empty list. The first entry is
-        the primary/anchor KV pool; hybrid caches append their auxiliary
-        pools (e.g. SWA, Mamba).
-        """
-        return []
-
     @abstractmethod
     def reset(self):
         pass

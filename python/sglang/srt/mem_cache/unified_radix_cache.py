@@ -387,11 +387,6 @@ class UnifiedRadixCache(BasePrefixCache):
         if self.host_pool_group is not None:
             self.host_pool_group.destroy()
 
-    def host_pool_stats(self) -> list[tuple[str, int, int]]:
-        if self.host_pool_group is None:
-            return []
-        return self.host_pool_group.occupancy_by_pool()
-
     def match_prefix(self, params: MatchPrefixParams) -> MatchResult:
         result = self.session.try_match_prefix(params)
         if result is not None:
