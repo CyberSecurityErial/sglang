@@ -536,8 +536,6 @@ class UnifiedRadixCache(BasePrefixCache):
                                 node_id,
                             )
                         else:
-                            if self.metrics_collector is not None:
-                                self.metrics_collector.increment_drop_declined()
                             logger.warning(
                                 "write_back: backup failed under host memory "
                                 "pressure but subtree drop declined (node "

@@ -1998,14 +1998,6 @@ class RadixCacheMetricsCollector(_StatLoggerDIMixin):
             labelnames=list(labels.keys()) + ["reason", "pool"],
         )
 
-        self.hicache_drop_declined = Counter(
-            name="sglang:hicache_drop_declined_total",
-            documentation="Write-back backups that failed under host memory "
-            "pressure where the subtree drop was declined (locked nodes); the "
-            "device KV stays resident until host space frees.",
-            labelnames=labels.keys(),
-        )
-
     def increment_eviction_num_tokens(self, num_tokens: int) -> None:
         self.eviction_num_tokens.labels(**self.labels).inc(num_tokens)
 
@@ -2028,9 +2020,6 @@ class RadixCacheMetricsCollector(_StatLoggerDIMixin):
         self.hicache_dropped_tokens.labels(**self.labels, reason=reason, pool=pool).inc(
             num_tokens
         )
-
-    def increment_drop_declined(self) -> None:
-        self.hicache_drop_declined.labels(**self.labels).inc()
 
 
 class EncoderMetricsCollector(_StatLoggerDIMixin):
