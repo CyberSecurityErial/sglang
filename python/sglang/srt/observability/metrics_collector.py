@@ -21,7 +21,7 @@ import os
 import time
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING, Union
 
 from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.environ import envs
@@ -33,7 +33,6 @@ from sglang.srt.utils.gauge_histogram import GaugeHistogram
 
 if TYPE_CHECKING:
     from prometheus_client import Gauge
-
     from sglang.srt.managers.schedule_batch import Req
 
 SGLANG_TEST_REQUEST_TIME_STATS = get_bool_env_var("SGLANG_TEST_REQUEST_TIME_STATS")
@@ -246,10 +245,12 @@ class SchedulerMetricsCollector(_StatLoggerDIMixin):
         server_args: Optional[ServerArgs] = None,
     ) -> None:
         # We need to import prometheus_client after setting the env variable `PROMETHEUS_MULTIPROC_DIR`
-        from prometheus_client import Counter as _PromCounter
-        from prometheus_client import Gauge as _PromGauge
-        from prometheus_client import Histogram as _PromHistogram
-        from prometheus_client import Summary as _PromSummary
+        from prometheus_client import (
+            Counter as _PromCounter,
+            Gauge as _PromGauge,
+            Histogram as _PromHistogram,
+            Summary as _PromSummary,
+        )
 
         Counter = self._counter_cls or _PromCounter
         Gauge = self._gauge_cls or _PromGauge
@@ -889,6 +890,17 @@ class SchedulerMetricsCollector(_StatLoggerDIMixin):
             ),
             labelnames=list(labels.keys()) + ["mode"],
         )
+        self.prefill_effective_tokens_total = Counter(
+            name="sglang:prefill_effective_tokens_total",
+            documentation=(
+                "Effective prefill tokens with retracted-request re-counts "
+                "excluded, updated on each log interval. mode: device_hit, "
+                "host_hit, storage_hit, input. Windowed prefix cache hit "
+                "rate = rate(sum of *_hit) / rate(sum of all modes); "
+                "per-tier rate uses a single *_hit mode in the numerator."
+            ),
+            labelnames=list(labels.keys()) + ["mode"],
+        )
         self.forward_execution_seconds_total = Counter(
             name="sglang:forward_execution_seconds_total",
             documentation=(
@@ -1236,6 +1248,24 @@ class SchedulerMetricsCollector(_StatLoggerDIMixin):
                     **dp_cooperation_info.to_labels(),
                 ).inc(delta)
 
+    def increment_effective_prefill_tokens(
+        self,
+        input_tokens: int,
+        device_hit_tokens: int,
+        host_hit_tokens: int,
+        storage_hit_tokens: int,
+    ) -> None:
+        for mode, delta in [
+            ("input", input_tokens),
+            ("device_hit", device_hit_tokens),
+            ("host_hit", host_hit_tokens),
+            ("storage_hit", storage_hit_tokens),
+        ]:
+            if delta > 0:
+                self.prefill_effective_tokens_total.labels(
+                    **self.labels, mode=mode
+                ).inc(delta)
+
     def increment_forward_execution_seconds(
         self,
         category: str,
@@ -1434,8 +1464,10 @@ class TokenizerMetricsCollector(_StatLoggerDIMixin):
         bucket_e2e_request_latency: Optional[List[float]] = None,
     ) -> None:
         # We need to import prometheus_client after setting the env variable `PROMETHEUS_MULTIPROC_DIR`
-        from prometheus_client import Counter as _PromCounter
-        from prometheus_client import Histogram as _PromHistogram
+        from prometheus_client import (
+            Counter as _PromCounter,
+            Histogram as _PromHistogram,
+        )
 
         Counter = self._counter_cls or _PromCounter
         Histogram = self._histogram_cls or _PromHistogram
@@ -1754,8 +1786,10 @@ class StorageMetricsCollector(_StatLoggerDIMixin):
         self,
         labels: Dict[str, str],
     ):
-        from prometheus_client import Counter as _PromCounter
-        from prometheus_client import Histogram as _PromHistogram
+        from prometheus_client import (
+            Counter as _PromCounter,
+            Histogram as _PromHistogram,
+        )
 
         Counter = self._counter_cls or _PromCounter
         Histogram = self._histogram_cls or _PromHistogram
@@ -1868,8 +1902,10 @@ class RadixCacheMetricsCollector(_StatLoggerDIMixin):
         labels: Dict[str, str],
     ) -> None:
         # We need to import prometheus_client after setting the env variable `PROMETHEUS_MULTIPROC_DIR`
-        from prometheus_client import Counter as _PromCounter
-        from prometheus_client import Histogram as _PromHistogram
+        from prometheus_client import (
+            Counter as _PromCounter,
+            Histogram as _PromHistogram,
+        )
 
         Counter = self._counter_cls or _PromCounter
         Histogram = self._histogram_cls or _PromHistogram
@@ -1899,6 +1935,11 @@ class RadixCacheMetricsCollector(_StatLoggerDIMixin):
                 0.2,
                 0.5,
                 1.0,
+                2.0,
+                5.0,
+                10.0,
+                30.0,
+                60.0,
             ]
         bucket_load_back_duration = get_histogram_conf_from_env(
             "SGLANG_BUCKET_LOAD_BACK_DURATION"
@@ -1924,30 +1965,26 @@ class RadixCacheMetricsCollector(_StatLoggerDIMixin):
                 0.5,
                 1.0,
             ]
-        # Write-back D->H transfers include blocking merged ops issued during
-        # eviction under --hicache-write-policy write_back, which can run for
-        # seconds -- hence the wider default range than eviction/load-back.
-        bucket_write_back_duration = get_histogram_conf_from_env(
-            "SGLANG_BUCKET_WRITE_BACK_DURATION"
-        )
-        if bucket_write_back_duration is None:
-            bucket_write_back_duration = [
-                0.001,
-                0.002,
-                0.005,
-                0.01,
-                0.02,
-                0.05,
-                0.1,
-                0.2,
-                0.5,
-                1.0,
-                2.0,
-                5.0,
-                10.0,
-                30.0,
-                60.0,
-            ]
+        # D->H backups include blocking merged ops issued during eviction under
+        # --hicache-write-policy write_back, which can run for seconds -- hence
+        # the wider default range than load-back.
+        bucket_write_back_duration = [
+            0.001,
+            0.002,
+            0.005,
+            0.01,
+            0.02,
+            0.05,
+            0.1,
+            0.2,
+            0.5,
+            1.0,
+            2.0,
+            5.0,
+            10.0,
+            30.0,
+            60.0,
+        ]
 
         self.eviction_duration_seconds = Histogram(
             name="sglang:eviction_duration_seconds",
@@ -1977,16 +2014,18 @@ class RadixCacheMetricsCollector(_StatLoggerDIMixin):
 
         self.write_back_duration_seconds = Histogram(
             name="sglang:write_back_duration_seconds",
-            documentation="Time taken to back up KV cache from GPU to CPU host "
-            "memory in seconds, per merged write op.",
+            documentation="Time taken to back up KV cache from GPU to local "
+            "host DRAM (L2) in seconds, per merged write op. Covers all D->H "
+            "backups regardless of --hicache-write-policy.",
             labelnames=labels.keys(),
             buckets=bucket_write_back_duration,
         )
 
         self.write_back_num_tokens = Counter(
             name="sglang:write_back_tokens_total",
-            documentation="The number of tokens backed up from GPU to CPU host "
-            "memory, by host pool (kv, swa, mamba, ...).",
+            documentation="The number of tokens backed up from GPU to local "
+            "host DRAM (L2), by host pool (kv, swa, mamba, ...). Covers all "
+            "D->H backups regardless of --hicache-write-policy.",
             labelnames=list(labels.keys()) + ["pool"],
         )
 
@@ -2027,9 +2066,11 @@ class EncoderMetricsCollector(_StatLoggerDIMixin):
 
     def __init__(self, labels: Dict[str, str]) -> None:
         # We need to import prometheus_client after setting the env variable `PROMETHEUS_MULTIPROC_DIR`
-        from prometheus_client import Counter as _PromCounter
-        from prometheus_client import Gauge as _PromGauge
-        from prometheus_client import Histogram as _PromHistogram
+        from prometheus_client import (
+            Counter as _PromCounter,
+            Gauge as _PromGauge,
+            Histogram as _PromHistogram,
+        )
 
         Counter = self._counter_cls or _PromCounter
         Gauge = self._gauge_cls or _PromGauge
