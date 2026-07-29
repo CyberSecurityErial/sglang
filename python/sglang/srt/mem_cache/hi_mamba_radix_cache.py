@@ -460,6 +460,8 @@ class HiMambaRadixCache(MambaRadixCache):
                         self.metrics_collector.increment_load_back_num_tokens(
                             num_tokens=num_tokens, pool=pool
                         )
+                if ack.num_bytes > 0:
+                    self.metrics_collector.increment_load_back_num_bytes(ack.num_bytes)
                 if ack.timing_enabled:
                     duration_ms = ack.start_event.elapsed_time(ack.finish_event)
                     self.metrics_collector.observe_load_back_duration(

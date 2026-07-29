@@ -165,6 +165,9 @@ class HiCacheAck(NamedTuple):
     timing_enabled: bool = False
     # Tokens transferred per host pool (PoolName value -> count).
     num_tokens_by_pool: Optional[dict[str, int]] = None
+    # Total bytes moved by the op across all pools, including draft piggyback
+    # and sidecar transfers that the per-pool token counts exclude.
+    num_bytes: int = 0
 
 
 class StorageOperation:
@@ -749,8 +752,17 @@ class HiCacheController:
                 num_tokens=len(op.device_indices),
                 timing_enabled=timing_enabled,
                 num_tokens_by_pool={PoolName.KV.value: len(op.device_indices)},
+                num_bytes=self._transfer_num_bytes(op),
             )
         )
+
+    def _transfer_num_bytes(self, op: CacheOperation) -> int:
+        """Total bytes moved by a merged transfer op (draft piggyback included)."""
+        num_tokens = len(op.device_indices)
+        num_bytes = num_tokens * self.mem_pool_host.size_per_token
+        if self.has_draft:
+            num_bytes += num_tokens * self.mem_pool_host_draft.size_per_token
+        return num_bytes
 
     def load(
         self,
@@ -843,6 +855,7 @@ class HiCacheController:
                 num_tokens=len(op.device_indices),
                 timing_enabled=timing_enabled,
                 num_tokens_by_pool={PoolName.KV.value: len(op.device_indices)},
+                num_bytes=self._transfer_num_bytes(op),
             )
         )
         return producer_id

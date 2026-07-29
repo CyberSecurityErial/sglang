@@ -690,7 +690,10 @@ class TestHiCacheStagedWriteBackDispatch(unittest.TestCase):
         class FakeHostGroup:
             layout = "page_first"
             can_use_write_back_jit = True
-            anchor_entry = SimpleNamespace(name=PoolName.KV)
+            anchor_entry = SimpleNamespace(
+                name=PoolName.KV, host_pool=SimpleNamespace(size_per_token=2)
+            )
+            entry_map = {}
 
             def backup_from_device_all_layer(
                 self,
@@ -751,7 +754,10 @@ class TestHiCacheStagedWriteBackDispatch(unittest.TestCase):
         class FakeHostGroup:
             layout = "page_first"
             can_use_write_back_jit = False
-            anchor_entry = SimpleNamespace(name=PoolName.KV)
+            anchor_entry = SimpleNamespace(
+                name=PoolName.KV, host_pool=SimpleNamespace(size_per_token=2)
+            )
+            entry_map = {}
 
             def backup_from_device_all_layer(
                 self,
@@ -809,6 +815,7 @@ class TestHiCacheStagedWriteBackDispatch(unittest.TestCase):
         class FakeHostPool:
             layout = "page_first"
             can_use_write_back_jit = True
+            size_per_token = 2
 
             def backup_from_device_all_layer(
                 self, device_pool, host_indices, device_indices, io_backend
@@ -849,6 +856,7 @@ class TestHiCacheStagedWriteBackDispatch(unittest.TestCase):
         class FakeHostPool:
             layout = "page_first"
             can_use_write_back_jit = False
+            size_per_token = 2
 
             def backup_from_device_all_layer(
                 self, device_pool, host_indices, device_indices, io_backend

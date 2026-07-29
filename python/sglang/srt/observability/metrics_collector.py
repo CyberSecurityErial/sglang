@@ -2022,6 +2022,26 @@ class RadixCacheMetricsCollector(_StatLoggerDIMixin):
             buckets=bucket_backup_duration,
         )
 
+        self.backup_num_bytes = Counter(
+            name="sglang:hicache_backup_bytes_total",
+            documentation="Bytes backed up from GPU to local host DRAM (L2), "
+            "all pools combined, including draft/sidecar transfers that the "
+            "token counter excludes. Divided by the rate of "
+            "hicache_backup_duration_seconds_sum, gives the achieved D->H "
+            "bandwidth while transferring.",
+            labelnames=labels.keys(),
+        )
+
+        self.load_back_num_bytes = Counter(
+            name="sglang:load_back_bytes_total",
+            documentation="Bytes loaded back from local host DRAM (L2) to "
+            "GPU, all pools combined, including draft/sidecar transfers that "
+            "the token counter excludes. Divided by the rate of "
+            "load_back_duration_seconds_sum, gives the achieved H->D "
+            "bandwidth while transferring.",
+            labelnames=labels.keys(),
+        )
+
         self.backup_num_tokens = Counter(
             name="sglang:hicache_backup_tokens_total",
             documentation="The number of tokens backed up from GPU to local "
@@ -2053,6 +2073,12 @@ class RadixCacheMetricsCollector(_StatLoggerDIMixin):
 
     def increment_backup_num_tokens(self, num_tokens: int, pool: str) -> None:
         self.backup_num_tokens.labels(**self.labels, pool=pool).inc(num_tokens)
+
+    def increment_backup_num_bytes(self, num_bytes: int) -> None:
+        self.backup_num_bytes.labels(**self.labels).inc(num_bytes)
+
+    def increment_load_back_num_bytes(self, num_bytes: int) -> None:
+        self.load_back_num_bytes.labels(**self.labels).inc(num_bytes)
 
     def observe_backup_duration(self, duration_seconds: float) -> None:
         self.backup_duration_seconds.labels(**self.labels).observe(duration_seconds)
