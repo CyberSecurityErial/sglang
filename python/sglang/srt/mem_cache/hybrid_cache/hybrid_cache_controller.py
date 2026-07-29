@@ -445,12 +445,14 @@ class HybridCacheController(BaseHiCacheController):
                 node_ids=op.node_ids,
                 num_tokens=len(op.device_indices),
                 timing_enabled=timing_enabled,
-                num_tokens_by_pool=self._write_num_tokens_by_pool(op),
+                num_tokens_by_pool=self._num_tokens_by_pool(op),
             )
         )
 
-    def _write_num_tokens_by_pool(self, op: CacheOperation) -> dict[str, int]:
-        """Per-pool token counts for a merged write op (anchor + extra pools)."""
+    def _num_tokens_by_pool(self, op: CacheOperation) -> dict[str, int]:
+        """Per-pool token counts for a merged transfer op (anchor + extra
+        pools), shared by D->H write and H->D load acks; sidecar transfers
+        reusing another pool's indices are excluded."""
         counts = {self.mem_pool_host.anchor_entry.name.value: len(op.device_indices)}
         for transfer in op.pool_transfers or []:
             if transfer.indices_from_pool is not None or transfer.host_indices is None:
@@ -555,6 +557,7 @@ class HybridCacheController(BaseHiCacheController):
                 op.node_ids,
                 num_tokens=len(op.device_indices),
                 timing_enabled=timing_enabled,
+                num_tokens_by_pool=self._num_tokens_by_pool(op),
             )
         )
         return producer_id

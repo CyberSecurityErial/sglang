@@ -1024,12 +1024,12 @@ class HiRadixCache(RadixCache):
             return
         for pool, num_tokens in (ack.num_tokens_by_pool or {}).items():
             if num_tokens > 0:
-                self.metrics_collector.increment_write_back_num_tokens(
+                self.metrics_collector.increment_backup_num_tokens(
                     num_tokens=num_tokens, pool=pool
                 )
         if ack.timing_enabled:
             duration_ms = ack.start_event.elapsed_time(ack.finish_event)
-            self.metrics_collector.observe_write_back_duration(duration_ms / 1000.0)
+            self.metrics_collector.observe_backup_duration(duration_ms / 1000.0)
 
     def loading_check(self):
         finish_count = 0
@@ -1052,7 +1052,11 @@ class HiRadixCache(RadixCache):
                 self.dec_lock_ref(end_node)
 
             if self.metrics_collector is not None:
-                self.metrics_collector.increment_load_back_num_tokens(ack.num_tokens)
+                for pool, num_tokens in (ack.num_tokens_by_pool or {}).items():
+                    if num_tokens > 0:
+                        self.metrics_collector.increment_load_back_num_tokens(
+                            num_tokens=num_tokens, pool=pool
+                        )
                 if ack.timing_enabled:
                     duration_ms = ack.start_event.elapsed_time(ack.finish_event)
                     self.metrics_collector.observe_load_back_duration(

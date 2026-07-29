@@ -81,7 +81,7 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 
 # Metric label per component, matching the host pool names used by
-# write_back_tokens_total and the host occupancy gauges.
+# hicache_backup_tokens_total and the host occupancy gauges.
 _COMPONENT_POOL_LABEL = {
     ComponentType.FULL: PoolName.KV.value,
     ComponentType.SWA: PoolName.SWA.value,
@@ -1788,12 +1788,12 @@ class UnifiedRadixCache(BasePrefixCache):
             return
         for pool, num_tokens in (ack.num_tokens_by_pool or {}).items():
             if num_tokens > 0:
-                self.metrics_collector.increment_write_back_num_tokens(
+                self.metrics_collector.increment_backup_num_tokens(
                     num_tokens=num_tokens, pool=pool
                 )
         if ack.timing_enabled:
             duration_ms = ack.start_event.elapsed_time(ack.finish_event)
-            self.metrics_collector.observe_write_back_duration(duration_ms / 1000.0)
+            self.metrics_collector.observe_backup_duration(duration_ms / 1000.0)
 
     def loading_check(self) -> None:
         """Poll load-back completions."""
@@ -1821,7 +1821,11 @@ class UnifiedRadixCache(BasePrefixCache):
                 self.dec_host_lock_ref(node, host_lock_params)
 
             if self.metrics_collector is not None:
-                self.metrics_collector.increment_load_back_num_tokens(ack.num_tokens)
+                for pool, num_tokens in (ack.num_tokens_by_pool or {}).items():
+                    if num_tokens > 0:
+                        self.metrics_collector.increment_load_back_num_tokens(
+                            num_tokens=num_tokens, pool=pool
+                        )
                 if ack.timing_enabled:
                     duration_ms = ack.start_event.elapsed_time(ack.finish_event)
                     self.metrics_collector.observe_load_back_duration(

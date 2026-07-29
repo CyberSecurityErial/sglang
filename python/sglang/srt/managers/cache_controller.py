@@ -842,6 +842,7 @@ class HiCacheController:
                 node_ids=op.node_ids,
                 num_tokens=len(op.device_indices),
                 timing_enabled=timing_enabled,
+                num_tokens_by_pool={PoolName.KV.value: len(op.device_indices)},
             )
         )
         return producer_id

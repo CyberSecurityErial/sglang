@@ -21,7 +21,7 @@ import os
 import time
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
 
 from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.environ import envs
@@ -33,6 +33,7 @@ from sglang.srt.utils.gauge_histogram import GaugeHistogram
 
 if TYPE_CHECKING:
     from prometheus_client import Gauge
+
     from sglang.srt.managers.schedule_batch import Req
 
 SGLANG_TEST_REQUEST_TIME_STATS = get_bool_env_var("SGLANG_TEST_REQUEST_TIME_STATS")
@@ -245,12 +246,10 @@ class SchedulerMetricsCollector(_StatLoggerDIMixin):
         server_args: Optional[ServerArgs] = None,
     ) -> None:
         # We need to import prometheus_client after setting the env variable `PROMETHEUS_MULTIPROC_DIR`
-        from prometheus_client import (
-            Counter as _PromCounter,
-            Gauge as _PromGauge,
-            Histogram as _PromHistogram,
-            Summary as _PromSummary,
-        )
+        from prometheus_client import Counter as _PromCounter
+        from prometheus_client import Gauge as _PromGauge
+        from prometheus_client import Histogram as _PromHistogram
+        from prometheus_client import Summary as _PromSummary
 
         Counter = self._counter_cls or _PromCounter
         Gauge = self._gauge_cls or _PromGauge
@@ -1464,10 +1463,8 @@ class TokenizerMetricsCollector(_StatLoggerDIMixin):
         bucket_e2e_request_latency: Optional[List[float]] = None,
     ) -> None:
         # We need to import prometheus_client after setting the env variable `PROMETHEUS_MULTIPROC_DIR`
-        from prometheus_client import (
-            Counter as _PromCounter,
-            Histogram as _PromHistogram,
-        )
+        from prometheus_client import Counter as _PromCounter
+        from prometheus_client import Histogram as _PromHistogram
 
         Counter = self._counter_cls or _PromCounter
         Histogram = self._histogram_cls or _PromHistogram
@@ -1786,10 +1783,8 @@ class StorageMetricsCollector(_StatLoggerDIMixin):
         self,
         labels: Dict[str, str],
     ):
-        from prometheus_client import (
-            Counter as _PromCounter,
-            Histogram as _PromHistogram,
-        )
+        from prometheus_client import Counter as _PromCounter
+        from prometheus_client import Histogram as _PromHistogram
 
         Counter = self._counter_cls or _PromCounter
         Histogram = self._histogram_cls or _PromHistogram
@@ -1902,10 +1897,8 @@ class RadixCacheMetricsCollector(_StatLoggerDIMixin):
         labels: Dict[str, str],
     ) -> None:
         # We need to import prometheus_client after setting the env variable `PROMETHEUS_MULTIPROC_DIR`
-        from prometheus_client import (
-            Counter as _PromCounter,
-            Histogram as _PromHistogram,
-        )
+        from prometheus_client import Counter as _PromCounter
+        from prometheus_client import Histogram as _PromHistogram
 
         Counter = self._counter_cls or _PromCounter
         Histogram = self._histogram_cls or _PromHistogram
@@ -1968,7 +1961,7 @@ class RadixCacheMetricsCollector(_StatLoggerDIMixin):
         # D->H backups include blocking merged ops issued during eviction under
         # --hicache-write-policy write_back, which can run for seconds -- hence
         # the wider default range than load-back.
-        bucket_write_back_duration = [
+        bucket_backup_duration = [
             0.001,
             0.002,
             0.005,
@@ -1988,14 +1981,20 @@ class RadixCacheMetricsCollector(_StatLoggerDIMixin):
 
         self.eviction_duration_seconds = Histogram(
             name="sglang:eviction_duration_seconds",
-            documentation="Time taken to evict memory from GPU to CPU in seconds.",
+            documentation="End-to-end time of a device eviction pass in "
+            "seconds; under --hicache-write-policy write_back this includes "
+            "the blocking D->H backup (see "
+            "sglang:hicache_backup_duration_seconds for the copy alone).",
             labelnames=labels.keys(),
             buckets=bucket_eviction_duration,
         )
 
         self.eviction_num_tokens = Counter(
             name="sglang:evicted_tokens_total",
-            documentation="The number of tokens evicted from GPU to CPU.",
+            documentation="The number of device KV token slots freed by "
+            "eviction, regardless of whether the data was backed up to host "
+            "(see sglang:hicache_backup_tokens_total) or destroyed (see "
+            "sglang:hicache_dropped_tokens_total).",
             labelnames=labels.keys(),
         )
 
@@ -2008,24 +2007,27 @@ class RadixCacheMetricsCollector(_StatLoggerDIMixin):
 
         self.load_back_num_tokens = Counter(
             name="sglang:load_back_tokens_total",
-            documentation="The number of tokens loaded from CPU to GPU.",
-            labelnames=labels.keys(),
+            documentation="The number of tokens loaded back from local host "
+            "DRAM (L2) to GPU, by host pool (kv, swa, mamba, ...).",
+            labelnames=list(labels.keys()) + ["pool"],
         )
 
-        self.write_back_duration_seconds = Histogram(
-            name="sglang:write_back_duration_seconds",
+        self.backup_duration_seconds = Histogram(
+            name="sglang:hicache_backup_duration_seconds",
             documentation="Time taken to back up KV cache from GPU to local "
             "host DRAM (L2) in seconds, per merged write op. Covers all D->H "
-            "backups regardless of --hicache-write-policy.",
+            "backups regardless of --hicache-write-policy. Distinct from the "
+            "host-to-storage (L3) sglang:backuped_tokens_total.",
             labelnames=labels.keys(),
-            buckets=bucket_write_back_duration,
+            buckets=bucket_backup_duration,
         )
 
-        self.write_back_num_tokens = Counter(
-            name="sglang:write_back_tokens_total",
+        self.backup_num_tokens = Counter(
+            name="sglang:hicache_backup_tokens_total",
             documentation="The number of tokens backed up from GPU to local "
             "host DRAM (L2), by host pool (kv, swa, mamba, ...). Covers all "
-            "D->H backups regardless of --hicache-write-policy.",
+            "D->H backups regardless of --hicache-write-policy. Distinct from "
+            "the host-to-storage (L3) sglang:backuped_tokens_total.",
             labelnames=list(labels.keys()) + ["pool"],
         )
 
@@ -2040,8 +2042,8 @@ class RadixCacheMetricsCollector(_StatLoggerDIMixin):
     def increment_eviction_num_tokens(self, num_tokens: int) -> None:
         self.eviction_num_tokens.labels(**self.labels).inc(num_tokens)
 
-    def increment_load_back_num_tokens(self, num_tokens: int) -> None:
-        self.load_back_num_tokens.labels(**self.labels).inc(num_tokens)
+    def increment_load_back_num_tokens(self, num_tokens: int, pool: str) -> None:
+        self.load_back_num_tokens.labels(**self.labels, pool=pool).inc(num_tokens)
 
     def observe_eviction_duration(self, duration_seconds: float) -> None:
         self.eviction_duration_seconds.labels(**self.labels).observe(duration_seconds)
@@ -2049,11 +2051,11 @@ class RadixCacheMetricsCollector(_StatLoggerDIMixin):
     def observe_load_back_duration(self, duration_seconds: float) -> None:
         self.load_back_duration_seconds.labels(**self.labels).observe(duration_seconds)
 
-    def increment_write_back_num_tokens(self, num_tokens: int, pool: str) -> None:
-        self.write_back_num_tokens.labels(**self.labels, pool=pool).inc(num_tokens)
+    def increment_backup_num_tokens(self, num_tokens: int, pool: str) -> None:
+        self.backup_num_tokens.labels(**self.labels, pool=pool).inc(num_tokens)
 
-    def observe_write_back_duration(self, duration_seconds: float) -> None:
-        self.write_back_duration_seconds.labels(**self.labels).observe(duration_seconds)
+    def observe_backup_duration(self, duration_seconds: float) -> None:
+        self.backup_duration_seconds.labels(**self.labels).observe(duration_seconds)
 
     def increment_dropped_tokens(self, num_tokens: int, reason: str, pool: str) -> None:
         self.hicache_dropped_tokens.labels(**self.labels, reason=reason, pool=pool).inc(
@@ -2066,11 +2068,9 @@ class EncoderMetricsCollector(_StatLoggerDIMixin):
 
     def __init__(self, labels: Dict[str, str]) -> None:
         # We need to import prometheus_client after setting the env variable `PROMETHEUS_MULTIPROC_DIR`
-        from prometheus_client import (
-            Counter as _PromCounter,
-            Gauge as _PromGauge,
-            Histogram as _PromHistogram,
-        )
+        from prometheus_client import Counter as _PromCounter
+        from prometheus_client import Gauge as _PromGauge
+        from prometheus_client import Histogram as _PromHistogram
 
         Counter = self._counter_cls or _PromCounter
         Gauge = self._gauge_cls or _PromGauge
