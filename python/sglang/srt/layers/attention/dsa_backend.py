@@ -515,14 +515,6 @@ class DeepseekSparseAttnBackend(
                 "extend rows, and prefill CP splits rows across ranks."
             )
             assert self.hisparse_coordinator is None, "DCP does not support hisparse."
-            if self.use_fused_topk:
-                # Fused top-k v2 under DCP is measured incorrect on the
-                # current tree (gsm8k 0.000 vs 0.920 with fusion off, single
-                # commit delta); disable until the v2 transform composes with
-                # the owner filter again. Costs decode perf, tracked in the
-                # PR's F-list.
-                print_warning_once("Disabling fused DSA top-k under DCP.")
-                self.use_fused_topk = False
             if model_runner.server_args.enable_dp_attention:
                 # Keep each DCP group inside one attention-DP shard so the
                 # replicated indexer sees identical requests group-wide.
@@ -813,6 +805,23 @@ class DeepseekSparseAttnBackend(
             return topk_indices
         raise RuntimeError(
             f"Unsupported {self.dsa_topk_backend = } for SGLANG_DSA_FUSE_TOPK."
+        )
+
+    def _use_fused_topk_for_batch(self, forward_batch: ForwardBatch) -> bool:
+        """Whether the indexer returned physical slots for this batch.
+
+        Keep this producer/consumer decision centralized. In particular, DCP
+        extend batches intentionally run the unfused top-k path, which returns
+        sequence-relative positions that attention must still map through the
+        page table. Treating those positions as fused physical slots corrupts
+        prefill attention even when fused decode itself is correct.
+        """
+        return self.use_fused_topk and not (
+            (
+                self.hisparse_coordinator is not None
+                and forward_batch.forward_mode.is_decode_or_idle()
+            )
+            or (self.dcp_enabled and not forward_batch.forward_mode.is_decode_or_idle())
         )
 
     def _dcp_global_slots_to_local_rows(
@@ -2053,7 +2062,7 @@ class DeepseekSparseAttnBackend(
             forward_batch.forward_mode
         )
 
-        if self.use_fused_topk and not self.dcp_enabled:
+        if self._use_fused_topk_for_batch(forward_batch):
             # Under DCP, extend stays on the unfused transform (see
             # get_indexer_metadata): the fused v2 transform is decode-shaped
             # and ~2x slower on large extend chunks.
@@ -2320,7 +2329,7 @@ class DeepseekSparseAttnBackend(
                 topk_indices,
                 layer.layer_id,
             )
-        elif self.use_fused_topk:
+        elif self._use_fused_topk_for_batch(forward_batch):
             page_table_1 = self._get_fused_topk_page_table(topk_indices)
         else:
             page_table_1 = transform_index_page_table_decode(
@@ -3027,7 +3036,7 @@ class DeepseekSparseAttnBackend(
         else:
             q_all = q.view(-1, layer.tp_q_head_num, layer.head_dim)
 
-        if self.use_fused_topk:
+        if self._use_fused_topk_for_batch(forward_batch):
             if topk_indices is not None:
                 topk_indices = self._pad_topk_indices(topk_indices, q.shape[0])
             page_table_1 = self._get_fused_topk_page_table(topk_indices)
@@ -3267,18 +3276,10 @@ class DeepseekSparseAttnBackend(
     def get_indexer_metadata(
         self, layer_id: int, forward_batch: ForwardBatch
     ) -> DSAIndexerMetadata:
-        force_unfused = (
-            not self.use_fused_topk
-            or (
-                self.hisparse_coordinator is not None
-                and forward_batch.forward_mode.is_decode_or_idle()
-            )
-            # Under DCP, fuse decode only: the v2 fused transform is
-            # decode/MTP-shaped and measured ~2x slower on 32k-row extend
-            # chunks; extend uses the unfused transform (positions), which
-            # carries the DCP owner filter itself.
-            or (self.dcp_enabled and not forward_batch.forward_mode.is_decode_or_idle())
-        )
+        # Under DCP, fuse decode only: the v2 fused transform is
+        # decode/MTP-shaped and measured ~2x slower on 32k-row extend chunks.
+        # The same decision is used by attention when interpreting the result.
+        force_unfused = not self._use_fused_topk_for_batch(forward_batch)
         return DSAIndexerMetadata(
             attn_metadata=self.forward_metadata,
             topk_transform_method=self.get_topk_transform_method(
