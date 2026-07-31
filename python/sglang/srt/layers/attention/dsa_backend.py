@@ -2676,7 +2676,10 @@ class DeepseekSparseAttnBackend(
             # FlashMLA KV returns natural-log LSE [B, H, 1], whereas the MLA
             # DCP correction kernel consumes base-2 LSE [B, H]. Normalize here
             # so the model-level combine has one backend-independent contract.
-            o = o.squeeze(1)
+            # Head padding makes the trimmed view non-contiguous for DCP2/4.
+            # The zero-KV fixup kernel and the model-level DCP combine both use
+            # packed [B, H, D] row strides, so materialize that layout here.
+            o = o.squeeze(1).contiguous()
             lse = lse.squeeze(-1).to(torch.float32).mul_(_LOG2_E).contiguous()
 
             # The DCP owner filter leaves -1 holes. A short request can leave a

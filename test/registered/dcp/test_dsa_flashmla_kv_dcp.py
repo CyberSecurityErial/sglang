@@ -67,6 +67,7 @@ class TestDSAFlashMLAKVDCP(unittest.TestCase):
         )
 
         self.assertEqual(out.shape, (batch_size, actual_heads, value_dim))
+        self.assertTrue(out.is_contiguous())
         torch.testing.assert_close(
             lse,
             torch.tensor([[1.0, 3.0], [2.0, 4.0]]),
