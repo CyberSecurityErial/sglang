@@ -85,6 +85,11 @@ from sglang.srt.utils import (
 # concat). Enable with SGLANG_DSA_TRITON_PREFILL=1. Decode stays on TileLang.
 _DSA_TRITON_PREFILL = get_bool_env_var("SGLANG_DSA_TRITON_PREFILL")
 _IS_GFX95 = is_gfx95_supported()
+
+# cp_lse_ag_out_rs_mla uses exp2/log2. FlashMLA KV decode exposes natural-log
+# LSE, so normalize it at the DSA backend boundary before the DCP combine.
+_LOG2_E = 1.4426950408889634
+
 if is_cuda():
     import deep_gemm
 
@@ -466,13 +471,44 @@ class DeepseekSparseAttnBackend(
         self.dcp_size = parallel.attn_dcp_size if self.dcp_enabled else 1
         self.dcp_rank = parallel.attn_dcp_rank if self.dcp_enabled else 0
         if self.dcp_enabled:
-            assert (
-                self.dsa_decode_impl == "trtllm" and self.dsa_prefill_impl == "trtllm"
-            ), (
-                "DCP requires the trtllm DSA backends (the sm100 defaults); "
-                f"got decode={self.dsa_decode_impl}, "
-                f"prefill={self.dsa_prefill_impl}."
-            )
+            dsa_backend_pair = (self.dsa_prefill_impl, self.dsa_decode_impl)
+            if dsa_backend_pair == ("trtllm", "trtllm"):
+                pass
+            elif dsa_backend_pair == ("flashmla_kv", "flashmla_kv"):
+                if self.device_sm_major != 9:
+                    raise ValueError(
+                        "DSA DCP with flashmla_kv is currently enabled only on "
+                        f"SM90 (Hopper/H20); got compute capability "
+                        f"sm_{self.device_capability[0]}{self.device_capability[1]}. "
+                        "Use the trtllm/trtllm DSA backend pair on SM100+."
+                    )
+                if not self.dsa_kv_cache_store_fp8:
+                    raise ValueError(
+                        "DSA DCP with flashmla_kv requires an FP8 KV cache; launch "
+                        "with --kv-cache-dtype fp8_e4m3. The BF16 FlashMLA sparse "
+                        "path has a different kernel/LSE contract and is not enabled "
+                        "by this implementation."
+                    )
+                # The model-side DCP Q all-gather widens the local TP head
+                # group. FlashMLA metadata and padding must target that widened
+                # count, not the pre-gather self.num_q_heads value.
+                dcp_num_q_heads = self.num_q_heads * self.dcp_size
+                if dcp_num_q_heads <= 64:
+                    self.flashmla_kv_num_q_heads = 64
+                elif dcp_num_q_heads <= 128:
+                    self.flashmla_kv_num_q_heads = 128
+                else:
+                    self.flashmla_kv_num_q_heads = dcp_num_q_heads
+            else:
+                raise ValueError(
+                    "Unsupported DSA backend pair for DCP: "
+                    f"prefill={self.dsa_prefill_impl}, "
+                    f"decode={self.dsa_decode_impl}. Supported pairs are "
+                    "trtllm/trtllm (SM100+) and flashmla_kv/flashmla_kv "
+                    "(SM90 with --kv-cache-dtype fp8_e4m3). Mixed pairs are "
+                    "rejected until their LSE and zero-local-KV contracts are "
+                    "validated together."
+                )
             assert not model_runner.server_args.enable_prefill_cp, (
                 "DCP does not compose with prefill CP yet: the DCP extend "
                 "recipe assumes every rank in a DCP group holds the same "
@@ -2171,6 +2207,7 @@ class DeepseekSparseAttnBackend(
                 layer=layer,
                 metadata=metadata,
                 page_table_1=page_table_1,
+                return_lse=self.dcp_enabled,
             )
         elif dsa_impl == "fa3":
             return self._forward_fa3(
@@ -2316,6 +2353,7 @@ class DeepseekSparseAttnBackend(
                 layer=layer,
                 metadata=metadata,
                 page_table_1=page_table_1,
+                return_lse=self.dcp_enabled,
             )
         elif self.dsa_decode_impl == "tilelang":
             # Cat-skip (HIP-only): when caller passes q_rope=None on HIP, q_all
@@ -2582,7 +2620,8 @@ class DeepseekSparseAttnBackend(
         layer,
         metadata: DSAMetadata,
         page_table_1,
-    ) -> torch.Tensor:
+        return_lse: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         from sgl_kernel.flash_mla import flash_mla_with_kvcache
 
         cache_seqlens = metadata.dsa_cache_seqlens_int32
@@ -2613,7 +2652,7 @@ class DeepseekSparseAttnBackend(
             indices.shape[-1] == self.dsa_index_topk
         )  # requirement of FlashMLA decode kernel
 
-        o, _ = flash_mla_with_kvcache(
+        o, lse = flash_mla_with_kvcache(
             q=q_input,
             k_cache=kv_cache,
             cache_seqlens=cache_seqlens,
@@ -2631,6 +2670,28 @@ class DeepseekSparseAttnBackend(
 
         if target_q_heads != num_q_heads:
             o = o[:, :, :num_q_heads, :]
+            lse = lse[:, :num_q_heads, :]
+
+        if return_lse:
+            # FlashMLA KV returns natural-log LSE [B, H, 1], whereas the MLA
+            # DCP correction kernel consumes base-2 LSE [B, H]. Normalize here
+            # so the model-level combine has one backend-independent contract.
+            o = o.squeeze(1)
+            lse = lse.squeeze(-1).to(torch.float32).mul_(_LOG2_E).contiguous()
+
+            # The DCP owner filter leaves -1 holes. A short request can leave a
+            # rank with no selected KV at all; force that partial to the online
+            # softmax identity (out=0, LSE=-inf) before the cross-rank combine.
+            dcp_local_counts = (page_table_1 >= 0).sum(dim=-1, dtype=torch.int32)
+            batch_size = page_table_1.shape[0]
+            fixup_zero_kv_rows(
+                o,
+                lse,
+                dcp_local_counts,
+                self.get_device_int32_arange(batch_size + 1),
+                max_seq_len=1,
+            )
+            return o, lse
 
         return o
 
