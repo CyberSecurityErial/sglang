@@ -11,9 +11,7 @@ from sglang.srt.runtime_context import get_parallel
 
 
 def _kvc(*, enable_hisparse: bool = False):
-    return SimpleNamespace(
-        server_args=SimpleNamespace(enable_hisparse=enable_hisparse)
-    )
+    return SimpleNamespace(server_args=SimpleNamespace(enable_hisparse=enable_hisparse))
 
 
 def test_dsa_indexer_cache_is_replicated_across_dcp_ranks() -> None:
@@ -40,9 +38,7 @@ def test_dsa_cell_size_accounts_for_dcp_indexer_replication() -> None:
     configurator = object.__new__(DefaultPoolConfigurator)
 
     with (
-        get_parallel().override(
-            attn_tp_size=8, dcp_enabled=True, attn_dcp_size=8
-        ),
+        get_parallel().override(attn_tp_size=8, dcp_enabled=True, attn_dcp_size=8),
         patch(
             "sglang.srt.layers.cp.utils."
             "get_glm_dsa_layer_split_effective_num_layers",
