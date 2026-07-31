@@ -52,6 +52,10 @@ def test_dsa_cell_size_accounts_for_dcp_indexer_replication() -> None:
             "sglang.srt.model_executor.pool_configurator.is_deepseek_dsa",
             return_value=True,
         ),
+        patch(
+            "sglang.srt.model_executor.pool_configurator.get_dsa_index_head_dim",
+            return_value=128,
+        ),
     ):
         cell_size = configurator._compute_cell_size(kvc, num_layers=2)
 
