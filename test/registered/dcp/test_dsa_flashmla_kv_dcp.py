@@ -17,9 +17,7 @@ register_cuda_ci(est_time=8, stage="base-b", runner_config="1-gpu-small")
 class TestDSAFlashMLAKVDCP(unittest.TestCase):
     @patch("sglang.srt.layers.attention.dsa_backend.fixup_zero_kv_rows")
     @patch("sgl_kernel.flash_mla.flash_mla_with_kvcache")
-    def test_returns_base2_lse_and_zero_row_metadata(
-        self, mock_flashmla, mock_fixup
-    ):
+    def test_returns_base2_lse_and_zero_row_metadata(self, mock_flashmla, mock_fixup):
         backend = object.__new__(DeepseekSparseAttnBackend)
         backend.real_page_size = 64
         backend.kv_cache_dim = 4
@@ -35,9 +33,7 @@ class TestDSAFlashMLAKVDCP(unittest.TestCase):
         value_dim = 3
         q = torch.zeros(batch_size, actual_heads, 4, dtype=torch.bfloat16)
         kv = torch.zeros(2 * 64 * 4, dtype=torch.bfloat16)
-        page_table = torch.tensor(
-            [[0, 1, -1, -1], [-1, -1, -1, -1]], dtype=torch.int32
-        )
+        page_table = torch.tensor([[0, 1, -1, -1], [-1, -1, -1, -1]], dtype=torch.int32)
         metadata = SimpleNamespace(
             dsa_cache_seqlens_int32=torch.tensor([2, 0], dtype=torch.int32),
             flashmla_metadata=DSAFlashMLAMetadata(
